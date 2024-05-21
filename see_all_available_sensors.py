@@ -4,12 +4,12 @@ import multiprocessing
 import numpy as np
 import signal
 import time
+import os
 
-def list_and_stream_devices(stop_event, feed_queue):
+def list_and_stream_devices(stop_event, feed_queue, processes):
     available_devices = dai.Device.getAllAvailableDevices()
     if available_devices:
         print("Available devices:")
-        processes = []
         for device_info in available_devices:
             print(f"Device name: {device_info.getMxId()}")
             process = multiprocessing.Process(target=start_camera_stream, args=(device_info, stop_event, feed_queue))
@@ -51,6 +51,8 @@ def start_camera_stream(device_info, stop_event, feed_queue):
                     if stop_event.is_set():
                         break
         except Exception as e:
+            if stop_event.is_set():
+                break
             print(f"Error with device {device_info.getMxId()}: {e}")
             print("Attempting to reconnect...")
             time.sleep(5)  # Wait before retrying
@@ -82,18 +84,32 @@ def display_feeds(stop_event, feed_queue):
     
     cv2.destroyAllWindows()
 
-def signal_handler(sig, frame, stop_event):
+def signal_handler(sig, frame, stop_event, processes):
     print("Ctrl+C received. Stopping processes...")
     stop_event.set()
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+            process.join()
+    os._exit(0)
 
 if __name__ == "__main__":
     stop_event = multiprocessing.Event()
     feed_queue = multiprocessing.Queue()
-    signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, stop_event))
     
+    processes = []
     display_process = multiprocessing.Process(target=display_feeds, args=(stop_event, feed_queue))
+    processes.append(display_process)
     display_process.start()
     
-    list_and_stream_devices(stop_event, feed_queue)
+    signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, stop_event, processes))
+    
+    try:
+        list_and_stream_devices(stop_event, feed_queue, processes)
+    except KeyboardInterrupt:
+        print("KeyboardInterrupt received in main. Setting stop event...")
+        stop_event.set()
     
     display_process.join()
+    while not feed_queue.empty():
+        feed_queue.get()  # Ensure queue is emptied
