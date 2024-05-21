@@ -1,17 +1,18 @@
 import depthai as dai
 import cv2
 import multiprocessing
+import numpy as np
 import signal
 import time
 
-def list_and_stream_devices(stop_event):
+def list_and_stream_devices(stop_event, feed_queue):
     available_devices = dai.Device.getAllAvailableDevices()
     if available_devices:
         print("Available devices:")
         processes = []
         for device_info in available_devices:
             print(f"Device name: {device_info.getMxId()}")
-            process = multiprocessing.Process(target=start_camera_stream, args=(device_info, stop_event))
+            process = multiprocessing.Process(target=start_camera_stream, args=(device_info, stop_event, feed_queue))
             processes.append(process)
             process.start()
             time.sleep(1)  # Adding a delay to prevent resource contention
@@ -20,7 +21,7 @@ def list_and_stream_devices(stop_event):
     else:
         print("No devices found.")
 
-def start_camera_stream(device_info, stop_event):
+def start_camera_stream(device_info, stop_event, feed_queue):
     while not stop_event.is_set():
         try:
             print(f"Starting stream for device {device_info.getMxId()}")
@@ -43,23 +44,43 @@ def start_camera_stream(device_info, stop_event):
 
             with dai.Device(pipeline, usb2Mode=True) as device:  # Using usb2Mode for compatibility
                 q_video = device.getOutputQueue(name="video", maxSize=30, blocking=True)
-                window_name = f"Video Feed {device_info.getMxId()}"
-                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-
                 while not stop_event.is_set():
                     video_packet = q_video.get()
                     frame = cv2.imdecode(video_packet.getData(), cv2.IMREAD_COLOR)
-                    cv2.imshow(window_name, frame)
-
-                    if cv2.waitKey(1) == ord('q'):
-                        stop_event.set()
+                    feed_queue.put((device_info.getMxId(), frame))
+                    if stop_event.is_set():
                         break
-
-                cv2.destroyAllWindows()
         except Exception as e:
             print(f"Error with device {device_info.getMxId()}: {e}")
             print("Attempting to reconnect...")
             time.sleep(5)  # Wait before retrying
+
+def display_feeds(stop_event, feed_queue):
+    cv2.namedWindow("Camera Feeds", cv2.WINDOW_NORMAL)
+    feeds = {}
+    while not stop_event.is_set():
+        while not feed_queue.empty():
+            device_id, frame = feed_queue.get()
+            feeds[device_id] = frame
+        
+        if feeds:
+            # Determine the grid size
+            num_feeds = len(feeds)
+            grid_size = int(np.ceil(np.sqrt(num_feeds)))
+            h, w, _ = list(feeds.values())[0].shape
+            canvas = np.zeros((h * grid_size, w * grid_size, 3), dtype=np.uint8)
+            
+            for idx, (device_id, frame) in enumerate(feeds.items()):
+                y, x = divmod(idx, grid_size)
+                canvas[y*h:(y+1)*h, x*w:(x+1)*w] = frame
+
+            cv2.imshow("Camera Feeds", canvas)
+        
+        if cv2.waitKey(1) == ord('q'):
+            stop_event.set()
+            break
+    
+    cv2.destroyAllWindows()
 
 def signal_handler(sig, frame, stop_event):
     print("Ctrl+C received. Stopping processes...")
@@ -67,5 +88,12 @@ def signal_handler(sig, frame, stop_event):
 
 if __name__ == "__main__":
     stop_event = multiprocessing.Event()
+    feed_queue = multiprocessing.Queue()
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, stop_event))
-    list_and_stream_devices(stop_event)
+    
+    display_process = multiprocessing.Process(target=display_feeds, args=(stop_event, feed_queue))
+    display_process.start()
+    
+    list_and_stream_devices(stop_event, feed_queue)
+    
+    display_process.join()
