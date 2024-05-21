@@ -16,8 +16,6 @@ def list_and_stream_devices(stop_event, feed_queue, processes):
             processes.append(process)
             process.start()
             time.sleep(1)  # Adding a delay to prevent resource contention
-        for process in processes:
-            process.join()
     else:
         print("No devices found.")
 
@@ -49,23 +47,7 @@ def start_camera_stream(device_info, stop_event, feed_queue):
                     video_packet = q_video.get()
                     frame = cv2.imdecode(video_packet.getData(), cv2.IMREAD_COLOR)
                     
-                    # Add IP address text with black outline and white text
-                    font_scale = 3
-                    thickness = 3
-                    text_size = cv2.getTextSize(ip_address, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-                    text_x = frame.shape[1] - text_size[0] - 10  # 10 pixels padding from the right edge
-                    text_y = frame.shape[0] - 20  # 20 pixels padding from the bottom edge
-                    
-                    # Draw black outline
-                    outline_thickness = thickness + 4
-                    cv2.putText(frame, ip_address, (text_x, text_y), 
-                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), outline_thickness, cv2.LINE_AA)
-                    
-                    # Draw white text
-                    cv2.putText(frame, ip_address, (text_x, text_y), 
-                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
-                    
-                    feed_queue.put((device_info.getMxId(), frame))
+                    feed_queue.put((device_info.getMxId(), frame, ip_address))
                     if stop_event.is_set():
                         break
         except Exception as e:
@@ -80,7 +62,23 @@ def display_feeds(stop_event, feed_queue):
     feeds = {}
     while not stop_event.is_set():
         while not feed_queue.empty():
-            device_id, frame = feed_queue.get()
+            device_id, frame, ip_address = feed_queue.get()
+            # Add IP address text with black outline and white text
+            font_scale = 3
+            thickness = 3
+            text_size = cv2.getTextSize(ip_address, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+            text_x = frame.shape[1] - text_size[0] - 10  # 10 pixels padding from the right edge
+            text_y = frame.shape[0] - 20  # 20 pixels padding from the bottom edge
+
+            # Draw black outline
+            outline_thickness = thickness + 4
+            cv2.putText(frame, ip_address, (text_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), outline_thickness, cv2.LINE_AA)
+
+            # Draw white text
+            cv2.putText(frame, ip_address, (text_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            
             feeds[device_id] = frame
         
         if feeds:
